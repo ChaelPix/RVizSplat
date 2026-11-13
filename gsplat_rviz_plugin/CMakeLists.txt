@@ -85,6 +85,15 @@ add_library(gsplat_rviz_plugin SHARED
   ${gsplat_rviz_plugin_source_files}
 )
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES AND
+   CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  # Colcon's default single-config build otherwise sorts the full cloud at -O0.
+  set_property(SOURCE
+    src/gsplat_rviz_plugin/sorters/cpu_sorter.cpp
+    src/gsplat_rviz_plugin/splat_loaders/ply_loader.cpp
+    APPEND PROPERTY COMPILE_OPTIONS -O2)
+endif()
+
 target_include_directories(gsplat_rviz_plugin PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>

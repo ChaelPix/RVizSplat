@@ -114,7 +114,7 @@ private:
     std::unique_ptr<ISplatSorter> sorter;
 
     while (true) {
-      std::unique_ptr<ISplatSorter> new_sorter;
+      std::optional<std::unique_ptr<ISplatSorter>> new_sorter;
       std::optional<std::vector<Ogre::Vector3>> centers;
       bool do_sort = false;
       Ogre::Vector3 fwd;
@@ -143,7 +143,7 @@ private:
 
       if (new_sorter) {
         // Old sorter (if any) is destroyed here, on this thread.
-        sorter = std::move(new_sorter);
+        sorter = std::move(*new_sorter);
       }
       if (centers) {
         if (sorter) sorter->uploadCenters(*centers);
@@ -258,9 +258,19 @@ SplatCloud::~SplatCloud()
 
 void SplatCloud::setSorter(std::unique_ptr<ISplatSorter> sorter)
 {
+  synchronous_sorter_.reset();
   scheduler_->setSorter(std::move(sorter));
   if (!centers_cache_.empty()) {
     scheduler_->setCenters(centers_cache_);
+  }
+}
+
+void SplatCloud::setSynchronousSorter(std::unique_ptr<ISplatSorter> sorter)
+{
+  scheduler_->setSorter(nullptr);
+  synchronous_sorter_ = std::move(sorter);
+  if (synchronous_sorter_) {
+    synchronous_sorter_->uploadCenters(centers_cache_);
   }
 }
 
@@ -448,7 +458,11 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
   }
 
   buildIndexVBO();
-  scheduler_->setCenters(centers_cache_);
+  if (synchronous_sorter_) {
+    synchronous_sorter_->uploadCenters(centers_cache_);
+  } else {
+    scheduler_->setCenters(centers_cache_);
+  }
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -469,6 +483,9 @@ void SplatCloud::clear()
   bounds_.setNull();
 
   scheduler_->setCenters({});
+  if (synchronous_sorter_) {
+    synchronous_sorter_->uploadCenters({});
+  }
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -519,9 +536,20 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
   // blank viewport on the next frame).
   if (!oit_enabled_ && vp) {
     if (const Ogre::Camera * cam = vp->getCamera()) {
-      scheduler_->requestSort(cam->getDerivedDirection());
-      if (auto result = scheduler_->takeResult()) {
-        applySort(result->indices.data(), result->count);
+      auto direction = cam->getDerivedDirection();
+      if (const auto * node = getParentSceneNode()) {
+        // The sorter receives local centers, so project the world direction
+        // onto the axes of the transformed cloud before computing depths.
+        direction = node->_getDerivedScale() * (node->_getDerivedOrientation().Inverse() * direction);
+      }
+      if (synchronous_sorter_) {
+        const auto result = synchronous_sorter_->sort(direction);
+        applySort(result.indices.data(), result.count);
+      } else {
+        scheduler_->requestSort(direction);
+        if (auto result = scheduler_->takeResult()) {
+          applySort(result->indices.data(), result->count);
+        }
       }
     }
   }
@@ -606,7 +634,7 @@ void SplatCloud::notifyRenderSingleObject(
   float splat_z_near = 0.0f;
   float splat_z_far  = -1.0f;
   if (oit_enabled_ && source && !bounds_.isNull()) {
-    const Ogre::Matrix4 & view = source->getViewMatrix();
+    const auto & view = source->getWorldViewMatrix();
     const auto corners = bounds_.getAllCorners();
     float z_min =  std::numeric_limits<float>::max();
     float z_max = -std::numeric_limits<float>::max();
@@ -631,6 +659,8 @@ void SplatCloud::notifyRenderSingleObject(
     if (params) {
       params->setIgnoreMissingParams(true);
       params->setNamedConstant("sh_degree",      active_sh_degree_);
+      params->setNamedConstant("u_min_peak_opacity", minimum_peak_opacity_);
+      params->setNamedConstant("u_alpha_threshold", oit_enabled_ ? 0.f : alpha_threshold_);
       params->setNamedConstant("u_clip_enabled", clip_enabled_ ? 1 : 0);
       const Ogre::Vector4 cmin(clip_min_.x, clip_min_.y, clip_min_.z, 0.0f);
       const Ogre::Vector4 cmax(clip_max_.x, clip_max_.y, clip_max_.z, 0.0f);

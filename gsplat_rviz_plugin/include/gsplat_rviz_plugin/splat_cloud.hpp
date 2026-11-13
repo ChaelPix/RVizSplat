@@ -51,6 +51,9 @@ public:
   // calls happen on that thread. Pass nullptr to disable sorting.
   void setSorter(std::unique_ptr<ISplatSorter> sorter);
 
+  // Sort on the render thread for offscreen cameras that change between draws.
+  void setSynchronousSorter(std::unique_ptr<ISplatSorter> sorter);
+
   // Upload new splat data.  Safe to call from the main thread; TBO
   // creation is deferred to the first notifyRenderSingleObject() call
   // so the GL context is guaranteed to be current. The centres are
@@ -63,6 +66,7 @@ public:
   int  getMaxShDegree() const { return max_sh_degree_; }
 
   void setAlphaThreshold(float t) { alpha_threshold_ = t; }
+  void setMinimumPeakOpacity(float opacity) { minimum_peak_opacity_ = opacity; }
 
   uint32_t getSplatCount() const { return splat_count_; }
 
@@ -129,6 +133,7 @@ private:
   int max_sh_degree_    = 0;  // highest degree available in the loaded data
   int active_sh_degree_ = 0;  // degree currently sent to the shader (user-controlled)
   float alpha_threshold_ = 0.05f;
+  float minimum_peak_opacity_ = 0.4f;
   int texels_per_splat_ = 0;  // compact base TBO = 2 uvec4 texels/splat (32 B)
   uint32_t splat_count_ = 0;
 
@@ -146,6 +151,7 @@ private:
 
   class SortScheduler;
   std::unique_ptr<SortScheduler> scheduler_;
+  std::unique_ptr<ISplatSorter> synchronous_sorter_;
 
   // ROI clip state (pushed as uniforms each frame).
   bool          clip_enabled_ = false;
